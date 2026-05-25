@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="24dp"
+    android:background="#1a1a2e">
+
+    <TextView
+        android:text="📡 MirrorSend"
+        android:textSize="28sp"
+        android:textColor="#e0e0e0"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="32dp"/>
+
+    <EditText
+        android:id="@+id/etIp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="IP do receptor (ex: 192.168.1.100)"
+        android:textColorHint="#888"
+        android:textColor="#fff"
+        android:background="#2a2a3e"
+        android:padding="12dp"
+        android:inputType="text"
+        android:layout_marginBottom="16dp"/>
+
+    <Button
+        android:id="@+id/btnStart"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="▶ Iniciar Transmissão"
+        android:backgroundTint="#4CAF50"
+        android:textColor="#fff"
+        android:layout_marginBottom="12dp"/>
+
+    <Button
+        android:id="@+id/btnStop"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="⏹ Parar"
+        android:backgroundTint="#F44336"
+        android:textColor="#fff"
+        android:layout_marginBottom="24dp"/>
+
+    <TextView
+        android:id="@+id/tvStatus"
+        android:text="Aguardando..."
+        android:textColor="#aaaaaa"
+        android:textSize="14sp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
+
+</LinearLayout>
