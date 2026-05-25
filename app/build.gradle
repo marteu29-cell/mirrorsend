@@ -4,6 +4,7 @@ plugins {
 }
 
 android {
+    namespace "com.mirror.transmitter"
     compileSdk 34
     defaultConfig {
         applicationId "com.mirror.transmitter"
