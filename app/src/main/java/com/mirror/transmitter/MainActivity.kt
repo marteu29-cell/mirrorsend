@@ -30,27 +30,25 @@ class MainActivity : AppCompatActivity() {
         projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         val btnStart = findViewById<Button>(R.id.btnStart)
-        val btnStop = findViewById<Button>(R.id.btnStop)
+        val btnStop  = findViewById<Button>(R.id.btnStop)
         val tvStatus = findViewById<TextView>(R.id.tvStatus)
 
-        tvStatus.text = "Procurando TV Box na rede..."
+        btnStart.isEnabled = false
+        tvStatus.text = "🔍 Procurando TV Box na rede..."
         startDiscovery(tvStatus, btnStart)
 
-        btnStart.isEnabled = false
         btnStart.setOnClickListener {
-            if (receiverIp == null) {
-                tvStatus.text = "TV Box não encontrada ainda..."
-                return@setOnClickListener
-            }
-            tvStatus.text = "Solicitando permissão de tela..."
+            val ip = receiverIp ?: return@setOnClickListener
+            discoverJob?.cancel()
+            tvStatus.text = "⏳ Solicitando permissão de captura..."
             startActivityForResult(projectionManager.createScreenCaptureIntent(), REQUEST_CODE)
         }
 
         btnStop.setOnClickListener {
-            val stopIntent = Intent(this, ScreenCaptureService::class.java)
-            stopIntent.action = ScreenCaptureService.ACTION_STOP
-            startService(stopIntent)
-            tvStatus.text = "Transmissão parada. Procurando TV Box..."
+            val si = Intent(this, ScreenCaptureService::class.java)
+            si.action = ScreenCaptureService.ACTION_STOP
+            startService(si)
+            tvStatus.text = "⏹ Parado. Procurando TV Box..."
             btnStart.isEnabled = false
             receiverIp = null
             startDiscovery(tvStatus, btnStart)
@@ -62,34 +60,33 @@ class MainActivity : AppCompatActivity() {
         discoverJob = CoroutineScope(Dispatchers.IO).launch {
             try {
                 val socket = DatagramSocket(UDP_PORT)
-                socket.broadcast = true
-                socket.soTimeout = 10000
-
+                socket.soTimeout = 5000
                 val buf = ByteArray(256)
                 val packet = DatagramPacket(buf, buf.size)
 
                 while (isActive) {
                     try {
                         socket.receive(packet)
-                        val msg = String(packet.data, 0, packet.length)
+                        val msg = String(packet.data, 0, packet.length).trim()
                         if (msg.startsWith(BROADCAST_PREFIX)) {
                             val ip = msg.removePrefix(BROADCAST_PREFIX).trim()
                             receiverIp = ip
                             withContext(Dispatchers.Main) {
-                                tvStatus.text = "✅ TV Box encontrada: $ip\nPronto para transmitir!"
+                                tvStatus.text = "✅ TV Box encontrada: $ip\nToque em Iniciar para transmitir"
                                 btnStart.isEnabled = true
                             }
                         }
                     } catch (e: java.net.SocketTimeoutException) {
                         withContext(Dispatchers.Main) {
-                            tvStatus.text = "Procurando TV Box... (abra o MirrorReceive na TV)"
+                            if (receiverIp == null)
+                                tvStatus.text = "🔍 Procurando TV Box...\n(abra o MirrorReceive na TV)"
                         }
                     }
                 }
                 socket.close()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    tvStatus.text = "Erro na descoberta: ${e.message}"
+                    tvStatus.text = "Erro: ${e.message}"
                 }
             }
         }
@@ -98,15 +95,14 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_CODE && resultCode == Activity.RESULT_OK && data != null) {
-            discoverJob?.cancel()
             val ip = receiverIp ?: return
-            val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            val si = Intent(this, ScreenCaptureService::class.java).apply {
                 action = ScreenCaptureService.ACTION_START
                 putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
                 putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
                 putExtra(ScreenCaptureService.EXTRA_RECEIVER_IP, ip)
             }
-            startForegroundService(serviceIntent)
+            startForegroundService(si)
             findViewById<TextView>(R.id.tvStatus).text = "📡 Transmitindo para $ip..."
         }
     }
