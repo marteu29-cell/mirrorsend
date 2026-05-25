@@ -14,42 +14,55 @@
         android:textColor="#E94560"
         android:textSize="32sp"
         android:textStyle="bold"
-        android:layout_marginBottom="8dp"/>
+        android:layout_marginBottom="4dp"/>
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Espelhamento de tela"
+        android:text="Digite o IP exibido na TV Box"
         android:textColor="#AAAAAA"
         android:textSize="14sp"
-        android:layout_marginBottom="40dp"/>
+        android:layout_marginBottom="24dp"/>
+
+    <EditText
+        android:id="@+id/etIp"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:hint="Ex: 192.168.1.100"
+        android:inputType="text"
+        android:textColor="#FFFFFF"
+        android:textColorHint="#666666"
+        android:background="#33FFFFFF"
+        android:padding="12dp"
+        android:textSize="18sp"
+        android:gravity="center"
+        android:layout_marginBottom="12dp"/>
 
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Procurando TV Box na rede..."
+        android:text="Aguardando..."
         android:textColor="#00FF88"
-        android:textSize="16sp"
+        android:textSize="15sp"
         android:gravity="center"
-        android:layout_marginBottom="40dp"
-        android:padding="16dp"
-        android:background="#22FFFFFF"/>
+        android:padding="12dp"
+        android:layout_marginBottom="24dp"/>
 
     <Button
         android:id="@+id/btnStart"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:text="▶ Iniciar Transmissão"
+        android:text="▶ INICIAR TRANSMISSÃO"
         android:textColor="#FFFFFF"
         android:backgroundTint="#E94560"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginBottom="12dp"/>
 
     <Button
         android:id="@+id/btnStop"
         android:layout_width="match_parent"
         android:layout_height="56dp"
-        android:text="⏹ Parar"
+        android:text="⏹ PARAR"
         android:textColor="#FFFFFF"
         android:backgroundTint="#444444"/>
 
