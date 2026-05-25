@@ -4,10 +4,11 @@ import android.app.Activity
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import kotlinx.coroutines.*
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 
@@ -16,10 +17,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var projectionManager: MediaProjectionManager
     private val REQUEST_CODE = 100
     private var receiverIp: String? = null
-    private var discoverJob: Job? = null
+    private val ui = Handler(Looper.getMainLooper())
+
+    @Volatile private var discoverRunning = false
+    private var discoverSocket: DatagramSocket? = null
 
     companion object {
-        const val UDP_PORT = 5556
+        const val UDP_PORT         = 5556
         const val BROADCAST_PREFIX = "MIRRORRECEIVE_HERE:"
     }
 
@@ -39,57 +43,63 @@ class MainActivity : AppCompatActivity() {
 
         btnStart.setOnClickListener {
             val ip = receiverIp ?: return@setOnClickListener
-            discoverJob?.cancel()
-            tvStatus.text = "⏳ Solicitando permissão de captura..."
+            stopDiscovery()
+            tvStatus.text = "⏳ Aguardando permissão de captura..."
             startActivityForResult(projectionManager.createScreenCaptureIntent(), REQUEST_CODE)
         }
 
         btnStop.setOnClickListener {
-            val si = Intent(this, ScreenCaptureService::class.java)
-            si.action = ScreenCaptureService.ACTION_STOP
+            val si = Intent(this, ScreenCaptureService::class.java).apply {
+                action = ScreenCaptureService.ACTION_STOP
+            }
             startService(si)
-            tvStatus.text = "⏹ Parado. Procurando TV Box..."
-            btnStart.isEnabled = false
             receiverIp = null
+            btnStart.isEnabled = false
+            tvStatus.text = "⏹ Parado. Procurando TV Box..."
             startDiscovery(tvStatus, btnStart)
         }
     }
 
     private fun startDiscovery(tvStatus: TextView, btnStart: Button) {
-        discoverJob?.cancel()
-        discoverJob = CoroutineScope(Dispatchers.IO).launch {
+        stopDiscovery()
+        discoverRunning = true
+
+        Thread {
             try {
-                val socket = DatagramSocket(UDP_PORT)
-                socket.soTimeout = 5000
-                val buf = ByteArray(256)
+                discoverSocket = DatagramSocket(UDP_PORT)
+                discoverSocket!!.soTimeout = 6000
+                val buf    = ByteArray(256)
                 val packet = DatagramPacket(buf, buf.size)
 
-                while (isActive) {
+                while (discoverRunning) {
                     try {
-                        socket.receive(packet)
+                        discoverSocket!!.receive(packet)
                         val msg = String(packet.data, 0, packet.length).trim()
                         if (msg.startsWith(BROADCAST_PREFIX)) {
                             val ip = msg.removePrefix(BROADCAST_PREFIX).trim()
                             receiverIp = ip
-                            withContext(Dispatchers.Main) {
-                                tvStatus.text = "✅ TV Box encontrada: $ip\nToque em Iniciar para transmitir"
+                            ui.post {
+                                tvStatus.text = "✅ TV Box encontrada: $ip\nToque em INICIAR para transmitir"
                                 btnStart.isEnabled = true
                             }
                         }
                     } catch (e: java.net.SocketTimeoutException) {
-                        withContext(Dispatchers.Main) {
-                            if (receiverIp == null)
-                                tvStatus.text = "🔍 Procurando TV Box...\n(abra o MirrorReceive na TV)"
+                        if (receiverIp == null) {
+                            ui.post { tvStatus.text = "🔍 Procurando TV Box...\n(abra MirrorReceive na TV)" }
                         }
                     }
                 }
-                socket.close()
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    tvStatus.text = "Erro: ${e.message}"
+                if (discoverRunning) {
+                    ui.post { tvStatus.text = "Erro busca: ${e.message}" }
                 }
             }
-        }
+        }.apply { isDaemon = true; name = "UDP-Discover"; start() }
+    }
+
+    private fun stopDiscovery() {
+        discoverRunning = false
+        try { discoverSocket?.close() } catch (_: Exception) {}
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -108,7 +118,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        discoverJob?.cancel()
+        stopDiscovery()
         super.onDestroy()
     }
 }

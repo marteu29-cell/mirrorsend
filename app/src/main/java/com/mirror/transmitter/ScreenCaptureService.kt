@@ -20,7 +20,6 @@ import android.os.IBinder
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.net.Socket
@@ -28,51 +27,53 @@ import java.net.Socket
 class ScreenCaptureService : Service() {
 
     companion object {
-        const val ACTION_START = "ACTION_START"
-        const val ACTION_STOP = "ACTION_STOP"
-        const val EXTRA_RESULT_CODE = "RESULT_CODE"
-        const val EXTRA_RESULT_DATA = "RESULT_DATA"
-        const val EXTRA_RECEIVER_IP = "RECEIVER_IP"
-        const val PORT_VIDEO = 5555
-        const val PORT_AUDIO = 5557
-        const val CHANNEL_ID = "ScreenMirrorChannel"
-        const val TYPE_VIDEO: Byte = 0x01
-        const val TYPE_AUDIO: Byte = 0x02
+        const val ACTION_START        = "ACTION_START"
+        const val ACTION_STOP         = "ACTION_STOP"
+        const val EXTRA_RESULT_CODE   = "RESULT_CODE"
+        const val EXTRA_RESULT_DATA   = "RESULT_DATA"
+        const val EXTRA_RECEIVER_IP   = "RECEIVER_IP"
+        const val PORT_VIDEO          = 5555
+        const val PORT_AUDIO          = 5557
+        const val CHANNEL_ID          = "MirrorSendChannel"
+        const val TYPE_VIDEO          = 0x01.toByte()
+        const val TYPE_AUDIO          = 0x02.toByte()
     }
+
+    @Volatile private var running = false
 
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private var videoJob: Job? = null
-    private var audioJob: Job? = null
-    private var socket: Socket? = null
     private var audioRecord: AudioRecord? = null
+    private var videoSocket: Socket? = null
+    private var audioSocket: Socket? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MirrorSend")
-            .setContentText("Transmitindo tela e áudio...")
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentText("Transmitindo tela...")
+            .setSmallIcon(android.R.drawable.ic_menu_send)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
-        startForeground(1, notification)
+        startForeground(1, notif)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
-                val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return START_NOT_STICKY
-                val receiverIp = intent.getStringExtra(EXTRA_RECEIVER_IP) ?: return START_NOT_STICKY
-                val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                mediaProjection = manager.getMediaProjection(resultCode, resultData)
-                startCapture(receiverIp)
-            }
-            ACTION_STOP -> stopSelf()
+        if (intent?.action == ACTION_START) {
+            val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, -1)
+            val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return START_NOT_STICKY
+            val receiverIp = intent.getStringExtra(EXTRA_RECEIVER_IP) ?: return START_NOT_STICKY
+
+            val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mgr.getMediaProjection(resultCode, resultData)
+            running = true
+            startCapture(receiverIp)
+        } else if (intent?.action == ACTION_STOP) {
+            stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -82,8 +83,9 @@ class ScreenCaptureService : Service() {
         @Suppress("DEPRECATION")
         (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
 
-        val width = (metrics.widthPixels / 2) and 0xFFFE.inv().inv()   // múltiplo de 2
-        val height = (metrics.heightPixels / 2) and 0xFFFE.inv().inv()
+        // Metade da resolução real
+        val width   = (metrics.widthPixels  / 2) and 0xFFFFFFFE.toInt()
+        val height  = (metrics.heightPixels / 2) and 0xFFFFFFFE.toInt()
         val density = metrics.densityDpi
 
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
@@ -93,41 +95,39 @@ class ScreenCaptureService : Service() {
             imageReader?.surface, null, null
         )
 
-        videoJob = CoroutineScope(Dispatchers.IO).launch {
-            var sock: Socket? = null
+        // Thread de vídeo
+        Thread {
             try {
-                sock = Socket(ip, PORT_VIDEO)
-                sock.tcpNoDelay = true
-                sock.setSendBufferSize(512 * 1024)
-                val out = DataOutputStream(sock.getOutputStream())
-                socket = sock
+                videoSocket = Socket(ip, PORT_VIDEO)
+                videoSocket!!.tcpNoDelay = true
+                videoSocket!!.setSendBufferSize(512 * 1024)
+                val out = DataOutputStream(videoSocket!!.getOutputStream())
 
-                delay(300) // dar tempo ao VirtualDisplay inicializar
+                Thread.sleep(400) // aguardar VirtualDisplay inicializar
 
-                while (isActive) {
+                while (running) {
                     val image = imageReader?.acquireLatestImage()
                     if (image == null) {
-                        delay(16)
+                        Thread.sleep(16)
                         continue
                     }
                     try {
-                        val plane = image.planes[0]
-                        val buffer = plane.buffer
-                        val pixelStride = plane.pixelStride
-                        val rowStride = plane.rowStride
-                        val rowPadding = rowStride - pixelStride * width
+                        val plane      = image.planes[0]
+                        val buf        = plane.buffer
+                        val pixStride  = plane.pixelStride
+                        val rowStride  = plane.rowStride
+                        val rowPad     = rowStride - pixStride * width
+                        val bmpW       = width + rowPad / pixStride
 
-                        val bitmapW = width + rowPadding / pixelStride
-                        val full = Bitmap.createBitmap(bitmapW, height, Bitmap.Config.ARGB_8888)
-                        full.copyPixelsFromBuffer(buffer)
+                        val full = Bitmap.createBitmap(bmpW, height, Bitmap.Config.ARGB_8888)
+                        full.copyPixelsFromBuffer(buf)
 
-                        val bmp = if (bitmapW > width) Bitmap.createBitmap(full, 0, 0, width, height) else full
+                        val bmp = if (bmpW > width) Bitmap.createBitmap(full, 0, 0, width, height) else full
 
                         val baos = ByteArrayOutputStream(width * height / 4)
-                        bmp.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 70, baos)
                         val bytes = baos.toByteArray()
 
-                        // Protocolo: [type:1][size:4][data:N]
                         out.writeByte(TYPE_VIDEO.toInt())
                         out.writeInt(bytes.size)
                         out.write(bytes)
@@ -138,30 +138,29 @@ class ScreenCaptureService : Service() {
                     } finally {
                         image.close()
                     }
-                    delay(33)
+                    Thread.sleep(33) // ~30 fps
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             } finally {
-                sock?.close()
+                try { videoSocket?.close() } catch (_: Exception) {}
             }
-        }
+        }.apply { isDaemon = true; name = "Video-Sender"; start() }
 
-        // Captura de áudio (Android 10+)
+        // Thread de áudio (Android 10+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            audioJob = CoroutineScope(Dispatchers.IO).launch {
-                var audioSock: Socket? = null
+            Thread {
                 try {
-                    delay(500)
-                    audioSock = Socket(ip, PORT_AUDIO)
-                    audioSock.tcpNoDelay = true
-                    val out = DataOutputStream(audioSock.getOutputStream())
+                    Thread.sleep(600)
+                    audioSocket = Socket(ip, PORT_AUDIO)
+                    audioSocket!!.tcpNoDelay = true
+                    val out = DataOutputStream(audioSocket!!.getOutputStream())
 
-                    val sampleRate = 44100
+                    val sampleRate    = 44100
                     val channelConfig = AudioFormat.CHANNEL_IN_STEREO
-                    val encoding = AudioFormat.ENCODING_PCM_16BIT
-                    val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelConfig, encoding)
-                    val bufSize = minBuf * 4
+                    val encoding      = AudioFormat.ENCODING_PCM_16BIT
+                    val minBuf        = AudioRecord.getMinBufferSize(sampleRate, channelConfig, encoding)
+                    val bufSize       = minBuf * 4
 
                     val config = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
                         .addMatchingUsage(android.media.AudioAttributes.USAGE_MEDIA)
@@ -182,9 +181,9 @@ class ScreenCaptureService : Service() {
                         .build()
 
                     audioRecord?.startRecording()
-
                     val buf = ByteArray(bufSize)
-                    while (isActive) {
+
+                    while (running) {
                         val read = audioRecord?.read(buf, 0, bufSize) ?: break
                         if (read > 0) {
                             out.writeByte(TYPE_AUDIO.toInt())
@@ -196,26 +195,27 @@ class ScreenCaptureService : Service() {
                 } catch (e: Exception) {
                     e.printStackTrace()
                 } finally {
-                    audioRecord?.stop()
-                    audioRecord?.release()
-                    audioSock?.close()
+                    try { audioRecord?.stop(); audioRecord?.release() } catch (_: Exception) {}
+                    try { audioSocket?.close() } catch (_: Exception) {}
                 }
-            }
+            }.apply { isDaemon = true; name = "Audio-Sender"; start() }
         }
     }
 
     private fun createNotificationChannel() {
-        val ch = NotificationChannel(CHANNEL_ID, "Screen Mirror", NotificationManager.IMPORTANCE_LOW)
+        val ch = NotificationChannel(CHANNEL_ID, "MirrorSend", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
     override fun onDestroy() {
-        videoJob?.cancel()
-        audioJob?.cancel()
-        virtualDisplay?.release()
-        mediaProjection?.stop()
-        imageReader?.close()
-        socket?.close()
+        running = false
+        try { virtualDisplay?.release() }   catch (_: Exception) {}
+        try { mediaProjection?.stop() }     catch (_: Exception) {}
+        try { imageReader?.close() }        catch (_: Exception) {}
+        try { audioRecord?.stop() }         catch (_: Exception) {}
+        try { audioRecord?.release() }      catch (_: Exception) {}
+        try { videoSocket?.close() }        catch (_: Exception) {}
+        try { audioSocket?.close() }        catch (_: Exception) {}
         super.onDestroy()
     }
 }
