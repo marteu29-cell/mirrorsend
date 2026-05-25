@@ -12,7 +12,9 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -72,47 +74,71 @@ class ScreenCaptureService : Service() {
     private fun startCapture(ip: String) {
         val metrics = DisplayMetrics()
         val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
 
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
+        // Usar resolução reduzida para melhor desempenho
+        val width = metrics.widthPixels / 2
+        val height = metrics.heightPixels / 2
         val density = metrics.densityDpi
 
         imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+
+        val handler = Handler(Looper.getMainLooper())
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture", width, height, density,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface, null, null
+            imageReader?.surface, null, handler
         )
 
         job = CoroutineScope(Dispatchers.IO).launch {
             try {
                 socket = Socket(ip, PORT)
+                socket!!.tcpNoDelay = true
                 val out = DataOutputStream(socket!!.getOutputStream())
 
+                // Aguardar um momento para o VirtualDisplay inicializar
+                delay(500)
+
                 while (isActive) {
-                    val image = imageReader?.acquireLatestImage() ?: continue
-                    val planes = image.planes
-                    val buffer = planes[0].buffer
-                    val pixelStride = planes[0].pixelStride
-                    val rowStride = planes[0].rowStride
-                    val rowPadding = rowStride - pixelStride * width
+                    val image = imageReader?.acquireLatestImage()
+                    if (image == null) {
+                        delay(16)
+                        continue
+                    }
 
-                    val bitmap = Bitmap.createBitmap(
-                        width + rowPadding / pixelStride, height, Bitmap.Config.ARGB_8888
-                    )
-                    bitmap.copyPixelsFromBuffer(buffer)
-                    image.close()
+                    try {
+                        val planes = image.planes
+                        val buffer = planes[0].buffer
+                        val pixelStride = planes[0].pixelStride
+                        val rowStride = planes[0].rowStride
+                        val rowPadding = rowStride - pixelStride * width
 
-                    val baos = ByteArrayOutputStream()
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 60, baos)
-                    val bytes = baos.toByteArray()
+                        val bitmapWidth = width + rowPadding / pixelStride
+                        val bitmap = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+                        bitmap.copyPixelsFromBuffer(buffer)
 
-                    out.writeInt(bytes.size)
-                    out.write(bytes)
-                    out.flush()
+                        // Recortar para o tamanho exato se necessário
+                        val finalBitmap = if (bitmapWidth != width) {
+                            Bitmap.createBitmap(bitmap, 0, 0, width, height)
+                        } else {
+                            bitmap
+                        }
 
-                    bitmap.recycle()
+                        val baos = ByteArrayOutputStream()
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos)
+                        val bytes = baos.toByteArray()
+
+                        out.writeInt(bytes.size)
+                        out.write(bytes)
+                        out.flush()
+
+                        if (finalBitmap !== bitmap) finalBitmap.recycle()
+                        bitmap.recycle()
+                    } finally {
+                        image.close()
+                    }
+
                     delay(33) // ~30fps
                 }
             } catch (e: Exception) {
@@ -134,6 +160,7 @@ class ScreenCaptureService : Service() {
         virtualDisplay?.release()
         mediaProjection?.stop()
         socket?.close()
+        imageReader?.close()
         super.onDestroy()
     }
 }
