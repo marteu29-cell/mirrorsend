@@ -39,8 +39,10 @@ class ScreenCaptureService : Service() {
         val ch = NotificationChannel("mirror", "MirrorSend", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         val n: Notification = NotificationCompat.Builder(this, "mirror")
-            .setContentTitle("MirrorSend").setContentText("Transmitindo...")
-            .setSmallIcon(android.R.drawable.ic_menu_send).build()
+            .setContentTitle("MirrorSend")
+            .setContentText("Transmitindo...")
+            .setSmallIcon(android.R.drawable.ic_menu_send)
+            .build()
         startForeground(1, n)
     }
 
@@ -48,8 +50,7 @@ class ScreenCaptureService : Service() {
         val code = intent?.getIntExtra("RESULT_CODE", -1) ?: return START_NOT_STICKY
         val data = intent.getParcelableExtra<Intent>("RESULT_DATA") ?: return START_NOT_STICKY
         val ip   = intent.getStringExtra("RECEIVER_IP") ?: return START_NOT_STICKY
-
-        val pm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val pm   = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = pm.getMediaProjection(code, data)
         running = true
         startStreaming(ip)
@@ -61,7 +62,6 @@ class ScreenCaptureService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         wm.defaultDisplay.getRealMetrics(metrics)
-
         val w = (metrics.widthPixels  / 2) and 0xFFFFFFFE.toInt()
         val h = (metrics.heightPixels / 2) and 0xFFFFFFFE.toInt()
 
@@ -74,24 +74,24 @@ class ScreenCaptureService : Service() {
 
         // ── Thread vídeo ─────────────────────────────────────────────────────
         Thread {
-            var sock: Socket? = null
+            var videoSock: Socket? = null
             try {
                 Thread.sleep(500)
-                sock = Socket(ip, 5555)
-                sock.tcpNoDelay = true
-                sock.setSendBufferSize(1024 * 1024)
-                val out = DataOutputStream(sock.getOutputStream().buffered(512 * 1024))
+                videoSock = Socket(ip, 5555)
+                videoSock.tcpNoDelay = true
+                videoSock.setSendBufferSize(1024 * 1024)
+                val out = DataOutputStream(videoSock.getOutputStream().buffered(512 * 1024))
 
                 while (running) {
                     val img = imageReader?.acquireLatestImage()
                     if (img == null) { Thread.sleep(16); continue }
                     try {
-                        val plane    = img.planes[0]
-                        val rowPad   = plane.rowStride - plane.pixelStride * w
-                        val bmpW     = w + rowPad / plane.pixelStride
-                        val full     = Bitmap.createBitmap(bmpW, h, Bitmap.Config.ARGB_8888)
+                        val plane  = img.planes[0]
+                        val rowPad = plane.rowStride - plane.pixelStride * w
+                        val bmpW   = w + rowPad / plane.pixelStride
+                        val full   = Bitmap.createBitmap(bmpW, h, Bitmap.Config.ARGB_8888)
                         full.copyPixelsFromBuffer(plane.buffer)
-                        val bmp      = if (bmpW > w) Bitmap.createBitmap(full, 0, 0, w, h) else full
+                        val bmp    = if (bmpW > w) Bitmap.createBitmap(full, 0, 0, w, h) else full
 
                         val baos = ByteArrayOutputStream()
                         bmp.compress(Bitmap.CompressFormat.JPEG, 65, baos)
@@ -108,18 +108,18 @@ class ScreenCaptureService : Service() {
                     Thread.sleep(40)
                 }
             } catch (e: Exception) { e.printStackTrace() }
-            finally { runCatching { sock?.close() } }
+            finally { runCatching { videoSock?.close() } }
         }.also { it.isDaemon = true; it.name = "VideoSend" }.start()
 
         // ── Thread áudio (Android 10+) ────────────────────────────────────────
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Thread {
-                var sock: Socket? = null
+                var audioSock: Socket? = null
                 try {
                     Thread.sleep(700)
-                    sock = Socket(ip, 5557)
-                    sock.tcpNoDelay = true
-                    val out  = DataOutputStream(sock.getOutputStream())
+                    audioSock = Socket(ip, 5557)
+                    audioSock.tcpNoDelay = true
+                    val out  = DataOutputStream(audioSock.getOutputStream())
                     val sr   = 44100
                     val cfg  = AudioFormat.CHANNEL_IN_STEREO
                     val enc  = AudioFormat.ENCODING_PCM_16BIT
@@ -135,18 +135,24 @@ class ScreenCaptureService : Service() {
                         .setAudioPlaybackCaptureConfig(capCfg)
                         .setAudioFormat(AudioFormat.Builder()
                             .setEncoding(enc).setSampleRate(sr).setChannelMask(cfg).build())
-                        .setBufferSizeInBytes(mBuf).build()
+                        .setBufferSizeInBytes(mBuf)
+                        .build()
 
                     audioRecord?.startRecording()
                     val buf = ByteArray(mBuf)
                     while (running) {
                         val n = audioRecord?.read(buf, 0, mBuf) ?: break
-                        if (n > 0) { out.writeByte(0x02); out.writeInt(n); out.write(buf, 0, n); out.flush() }
+                        if (n > 0) {
+                            out.writeByte(0x02)
+                            out.writeInt(n)
+                            out.write(buf, 0, n)
+                            out.flush()
+                        }
                     }
                 } catch (e: Exception) { e.printStackTrace() }
                 finally {
                     runCatching { audioRecord?.stop(); audioRecord?.release() }
-                    runCatching { sock?.close() }
+                    runCatching { audioSock?.close() }
                 }
             }.also { it.isDaemon = true; it.name = "AudioSend" }.start()
         }
